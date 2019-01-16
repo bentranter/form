@@ -51,4 +51,10 @@ func main() {
 		log.Printf("%v", err)
 	}
 	fmt.Printf("Updated article: %+v\n", newArticle)
+
+	// DELETE
+	if err := db.Destroy(&newArticle); err != nil {
+		log.Printf("%v", err)
+	}
+	fmt.Println("Deleted article")
 }

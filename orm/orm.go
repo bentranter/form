@@ -1,6 +1,7 @@
 package orm
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"time"
@@ -64,6 +65,8 @@ func (o *ORM) Find(model interface{}, id int64) error {
 	return o.conn.Get(model, stmt, args...)
 }
 
+// Save inserts the model into the database. Any fields set by the database
+// in the RETURNING clauses will be set on the model.
 func (o *ORM) Save(model interface{}) error {
 	t := time.Now()
 	_, clauses := o.clauses(model, true)
@@ -80,6 +83,8 @@ func (o *ORM) Save(model interface{}) error {
 	return o.conn.QueryRowx(stmt, args...).StructScan(model)
 }
 
+// Update updates the model by its primary key. It will set the "updated_at"
+// field to the current time.
 func (o *ORM) Update(model interface{}) error {
 	t := time.Now()
 	id, clauses := o.clauses(model, false)
@@ -95,6 +100,27 @@ func (o *ORM) Update(model interface{}) error {
 	defer o.log(t, stmt, args)
 
 	return o.conn.QueryRowx(stmt, args...).StructScan(model)
+}
+
+// Destroy deletes a model by its primary key.
+func (o *ORM) Destroy(model interface{}) error {
+	t := time.Now()
+
+	id, err := o.id(model)
+	if err != nil {
+		return err
+	}
+
+	stmt, args, err := o.builder.Delete("articles").
+		Where(squirrel.Eq{"id": id}).
+		ToSql()
+	if err != nil {
+		return err
+	}
+	defer o.log(t, stmt, args)
+
+	_, err = o.conn.Exec(stmt, args...)
+	return err
 }
 
 func (o *ORM) base() squirrel.SelectBuilder {
@@ -193,4 +219,19 @@ func (o *ORM) clauses(model interface{}, saving bool) (int64, map[string]interfa
 	}
 
 	return id, clauses
+}
+
+func (o *ORM) id(model interface{}) (int64, error) {
+	rv := reflect.ValueOf(model)
+
+	elem, err := reflectx.GetStructFromPtr(rv)
+	if err != nil {
+		panic(err)
+	}
+
+	field := elem.FieldByName("ID")
+	if field == reflect.Zero(field.Type()).Interface() {
+		return 0, errors.New("id is nil")
+	}
+	return field.Int(), nil
 }
