@@ -18,22 +18,37 @@ type Article struct {
 }
 
 func main() {
-	article := Article{}
-
 	db := orm.Connect()
 
-	for i := 0; i < 10; i++ {
-		if err := db.Find(&article, 2); err != nil {
-			log.Printf("%v", err)
-		}
+	// SELECT * FROM articles
+	articles := make([]*Article, 0)
+	if err := db.All(&articles); err != nil {
+		log.Fatalf("%+v", err)
 	}
+	fmt.Printf("Found %d articles\n", len(articles))
+
+	article := Article{}
+	// SELECT * FROM articles WHERE id = $1
+	if err := db.Find(&article, 2); err != nil {
+		log.Fatalf("%+v", err)
+	}
+	fmt.Printf("Found article: %+v\n", article)
 
 	newArticle := Article{
-		Title: "Hey!!",
+		Title: "Saving test",
 		Text:  "A test.",
 	}
+
+	// INSERT INTO articles (created_at,text,title,updated_at) VALUES ($1,$2,$3,$4) RETURNING *
 	if err := db.Save(&newArticle); err != nil {
 		log.Printf("%v", err)
 	}
-	fmt.Printf("%+v", newArticle)
+	fmt.Printf("New article: %+v\n", newArticle)
+
+	// UPDATE articles SET text = $1, title = $2, updated_at = $3 WHERE id = $4 RETURNING *
+	newArticle.Title = "Updating test"
+	if err := db.Update(&newArticle); err != nil {
+		log.Printf("%v", err)
+	}
+	fmt.Printf("Updated article: %+v\n", newArticle)
 }

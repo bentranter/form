@@ -38,6 +38,19 @@ type ORM struct {
 	builder squirrel.StatementBuilderType
 }
 
+// All returns all models.
+func (o *ORM) All(models interface{}) error {
+	t := time.Now()
+
+	stmt, args, err := o.base().ToSql()
+	if err != nil {
+		return err
+	}
+	defer o.log(t, stmt, args)
+
+	return o.conn.Select(models, stmt, args...)
+}
+
 // Find gets an object by its primary key.
 func (o *ORM) Find(model interface{}, id int64) error {
 	t := time.Now()
@@ -53,12 +66,27 @@ func (o *ORM) Find(model interface{}, id int64) error {
 
 func (o *ORM) Save(model interface{}) error {
 	t := time.Now()
-
-	columns, values := o.columns(model)
+	_, clauses := o.clauses(model, true)
 
 	stmt, args, err := o.builder.Insert("articles").
-		Columns(columns...).
-		Values(values...).
+		SetMap(clauses).
+		Suffix("RETURNING *").
+		ToSql()
+	if err != nil {
+		return err
+	}
+	defer o.log(t, stmt, args)
+
+	return o.conn.QueryRowx(stmt, args...).StructScan(model)
+}
+
+func (o *ORM) Update(model interface{}) error {
+	t := time.Now()
+	id, clauses := o.clauses(model, false)
+
+	stmt, args, err := o.builder.Update("articles").
+		SetMap(clauses).
+		Where(squirrel.Eq{"id": id}).
 		Suffix("RETURNING *").
 		ToSql()
 	if err != nil {
@@ -79,7 +107,7 @@ func (o *ORM) log(t time.Time, stmt string, args []interface{}) {
 	fmt.Printf(" %v\n", args)
 }
 
-func (o *ORM) columns(model interface{}) ([]string, []interface{}) {
+func (o *ORM) clauses(model interface{}, saving bool) (int64, map[string]interface{}) {
 	rv := reflect.ValueOf(model)
 
 	elem, err := reflectx.GetStructFromPtr(rv)
@@ -88,9 +116,9 @@ func (o *ORM) columns(model interface{}) ([]string, []interface{}) {
 	}
 
 	numFields := elem.NumField()
-
-	columns := make([]string, 0)
-	values := make([]interface{}, 0)
+	now := time.Now()
+	clauses := make(map[string]interface{})
+	id := int64(0)
 
 	for i := 0; i < numFields; i++ {
 		field := elem.Field(i)
@@ -106,20 +134,63 @@ func (o *ORM) columns(model interface{}) ([]string, []interface{}) {
 
 		value := field.Interface()
 		if value != reflect.Zero(field.Type()).Interface() {
-			columns = append(columns, name)
-			values = append(values, value)
-		} else {
+			// Within this block, we handle fields that have values.
+			//
+			// We want different behaviour depending on the name of the field,
+			// as some fields will be treated specially.
 			switch name {
+
+			// Don't update the ID if we're not saving. IDs shouldn't be
+			// set in an "UPDATE" clause! Also, set the ID so we can return it
+			// for the query engine to use as a primary key.
+			case "id":
+				if !saving {
+					id = field.Int()
+					continue
+				} else {
+					clauses[name] = value
+				}
+
+			// Don't update the "created_at" field if we're updating.
+			case "created_at":
+				if !saving {
+					continue
+				}
+
+			// Update the "updated_at" field if we're updating, even if it has
+			// a value.
+			case "updated_at":
+				if !saving {
+					clauses[name] = now
+				}
+
+			default:
+				clauses[name] = value
+			}
+
+		} else {
+			// Within this block, we handle fields that DO NOT have values.
+			switch name {
+			// If the ID field is present, we want the database to set it,
+			// so we do nothing here.
 			case "id":
 				continue
 
-			case "created_at", "updated_at":
-				columns = append(columns, name)
-				values = append(values, time.Now())
+			// If we're saving (instead of updating) we want to set the
+			// "created_at" field.
+			case "created_at":
+				if saving {
+					clauses[name] = now
+				}
+
+			// If the "updated_at" field is null, we assume we always
+			// want to update it.
+			case "updated_at":
+				clauses[name] = now
 			}
 
 		}
 	}
 
-	return columns, values
+	return id, clauses
 }
